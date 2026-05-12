@@ -1,22 +1,22 @@
-// const db = require('./src/config/db'); // DB 연결 코드 불러오기
 const express = require('express');
 const cors = require('cors');
-const os = require('os'); // 내 컴퓨터의 네트워크 정보를 가져오는 도구
-const app = express();
+const os = require('os');
 const axios = require('axios');
 require('dotenv').config();
 
 // 라우터 불러오기
 const userRoute = require('./src/routes/userRoute');
 
+const app = express();
+
 // 1. 미들웨어 설정
 app.use(cors());
 app.use(express.json());
 
-// 2. API 경로 설정
+// 2. API 경로 설정 (여기서 /api/users와 userRoute를 연결)
 app.use('/api/users', userRoute);
 
-// TMAP 대중교통 API
+// TMAP 대중교통 API (친구 작업분)
 app.post('/api/transit/routes', async (req, res) => {
     try {
         const response = await axios.post(
@@ -37,15 +37,13 @@ app.post('/api/transit/routes', async (req, res) => {
     }
 });
 
-// 3. 기본 홈 경로
 app.get('/', (req, res) => {
     res.send('Star_Spot 백엔드 서버가 가동 중입니다.');
 });
 
-// 4. 서버 실행 및 내 IP 주소 출력 기능
+// 4. 서버 실행 및 IP 출력
 const PORT = 5000;
 
-// 내 컴퓨터의 IPv4 주소를 찾는 함수
 function getLocalIp() {
     const interfaces = os.networkInterfaces();
     for (const devName in interfaces) {
@@ -68,5 +66,4 @@ app.listen(PORT, () => {
     console.log(`[로컬 주소] http://localhost:${PORT}`);
     console.log(`[네트워크 주소] http://${myIp}:${PORT}`);
     console.log(`================================================`);
-    console.log(`※ 프론트엔드 담당자에게 '네트워크 주소'를 공유해주세요.`);
 });
