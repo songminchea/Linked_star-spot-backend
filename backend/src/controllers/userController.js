@@ -80,40 +80,51 @@ exports.getPosts = async (req, res) => {
     }
 };
 
-// 게시글 수정
+// [보안 강화] 게시글 수정
 exports.updatePost = async (req, res) => {
-    const { id } = req.params; // URL에서 게시글 번호(id)를 가져옴
-    const { content, location_name } = req.body; // 수정할 내용들
+    const { id } = req.params;
+    const { content, location_name, user_email } = req.body; // 수정 요청 시 본인 이메일도 받아옴
 
     try {
-        const sql = 'UPDATE posts SET content = ?, location_name = ? WHERE id = ?';
-        const [result] = await db.execute(sql, [content, location_name, id]);
+        // id가 맞고, 작성자 이메일도 맞아야만 업데이트 실행!
+        const sql = 'UPDATE posts SET content = ?, location_name = ? WHERE id = ? AND user_email = ?';
+        const [result] = await db.execute(sql, [content, location_name, id, user_email]);
 
         if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "수정할 게시글을 찾을 수 없습니다." });
+            return res.status(403).json({ 
+                success: false, 
+                message: "수정 권한이 없거나 해당 게시글이 없습니다." 
+            });
         }
-        res.json({ success: true, message: "게시글이 성공적으로 수정되었습니다." });
+        res.json({ success: true, message: "본인 확인 완료! 수정되었습니다." });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
-//게시글 삭제
+// [보안 강화] 게시글 삭제
 exports.deletePost = async (req, res) => {
     const { id } = req.params;
+    const { user_email } = req.body; // 삭제 요청 시 본인 이메일도 받아옴
 
     try {
-        const sql = 'DELETE FROM posts WHERE id = ?';
-        const [result] = await db.execute(sql, [id]);
+        // id와 작성자 이메일이 모두 일치해야 삭제!
+        const sql = 'DELETE FROM posts WHERE id = ? AND user_email = ?';
+        const [result] = await db.execute(sql, [id, user_email]);
 
         if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "삭제할 게시글을 찾을 수 없습니다." });
+            return res.status(403).json({ 
+                success: false, 
+                message: "삭제 권한이 없거나 해당 게시글이 없습니다." 
+            });
         }
-        res.json({ success: true, message: "게시글이 삭제되었습니다." });
+        res.json({ success: true, message: "본인 확인 완료! 삭제되었습니다." });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
+
+
 
 // 5. 유저 프로필 조회
 exports.getUserProfile = async (req, res) => {
