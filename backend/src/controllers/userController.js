@@ -1,7 +1,7 @@
 const db = require('../config/db');
 const bcrypt = require('bcrypt');
 
-// 1. 회원가입 (기존 유지)
+// 1. 회원가입
 exports.signup = async (req, res) => {
     const { email, password, nickname, favorite_idol } = req.body;
     try {
@@ -14,7 +14,7 @@ exports.signup = async (req, res) => {
     }
 };
 
-// 2. 로그인 (기존 유지)
+// 2. 로그인
 exports.login = async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -34,36 +34,52 @@ exports.login = async (req, res) => {
     }
 };
 
-// 3. 지도 성지순례 후기 등록 (신규 추가!)
+// 3. 지도 성지순례 후기 등록
 exports.createPost = async (req, res) => {
-    const { user_email, nickname, content, location_name, latitude, longitude } = req.body;
+    const { user_email, nickname, content, location_name, latitude, longitude, idol_name } = req.body;
     
-    // multer로 업로드된 파일의 경로 (프레임 합성 사진)
+    // multer로 업로드된 파일의 경로
     const photo_path = req.file ? `/uploads/${req.file.filename}` : null;
 
     try {
         const sql = `
-            INSERT INTO posts (user_email, nickname, content, location_name, latitude, longitude, photo_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO posts (user_email, nickname, content, location_name, latitude, longitude, photo_path, idol_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
-        await db.execute(sql, [user_email, nickname, content, location_name, latitude, longitude, photo_path]);
+        await db.execute(sql, [user_email, nickname, content, location_name, latitude, longitude, photo_path, idol_name]);
         res.status(201).json({ success: true, message: "성지순례 지도가 업데이트되었습니다!" });
     } catch (err) {
         res.status(500).json({ success: false, message: "등록 실패: " + err.message });
     }
 };
 
-// 4. 지도 전체 데이터 조회 (신규 추가!)
-exports.getAllPosts = async (req, res) => {
+// 4. 지도 데이터 조회 (필터링 기능 포함)
+// GET /api/users/posts 또는 /api/users/posts?idol=뉴진스
+exports.getPosts = async (req, res) => {
+    const { idol } = req.query; // URL 파라미터에서 idol 값을 가져옴
+    console.log("필터링 요청 아이돌:", idol); 
+
     try {
-        const [rows] = await db.query('SELECT * FROM posts ORDER BY created_at DESC');
+        let sql = 'SELECT * FROM posts';
+        let params = [];
+
+        // 아이돌 필터링 조건이 있을 경우 WHERE 절 추가
+        if (idol) {
+            sql += ' WHERE idol_name = ?';
+            params.push(idol);
+        }
+
+        sql += ' ORDER BY created_at DESC'; // 최신순 정렬
+
+        const [rows] = await db.execute(sql, params);
         res.status(200).json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: "데이터 조회 중 서버 에러 발생" });
     }
 };
 
-// 5. 유저 프로필 조회 (추가)
+// 5. 유저 프로필 조회
 exports.getUserProfile = async (req, res) => {
     const { email } = req.params;
     try {
@@ -75,7 +91,7 @@ exports.getUserProfile = async (req, res) => {
     }
 };
 
-// 6. 최애 아이돌 수정 (추가)
+// 6. 최애 아이돌 수정
 exports.updateFavoriteIdol = async (req, res) => {
     const { email, favorite_idol } = req.body;
     try {

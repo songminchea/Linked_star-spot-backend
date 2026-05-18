@@ -30,6 +30,6 @@ router.patch('/update-idol', userController.updateFavoriteIdol);
 // 5. 지도 성지순례 후기 등록 & 조회
 // ★ 중요: upload.single('photo')가 반드시 들어가야 req.body를 읽을 수 있어!
 router.post('/posts', upload.single('photo'), userController.createPost); 
-router.get('/posts', userController.getAllPosts);
+router.get('/posts', userController.getPosts);
 
 module.exports = router;
