@@ -410,8 +410,10 @@ app.listen(PORT, () => {
     console.log(`================================================`);
 });
 
+// =================================================================
+// 🌟 [최종 수정] GET /feeds - 장소별 리뷰 완벽 필터링 및 조인 쿼리
+// =================================================================
 app.get('/feeds', async (req, res) => {
-  // 프론트엔드가 보낸 placeId를 가져옵니다.
   const { placeId } = req.query;
   console.log(`[리뷰 조회] 요청된 장소 ID (placeId): ${placeId}`);
 
@@ -419,28 +421,60 @@ app.get('/feeds', async (req, res) => {
     let query = '';
     let params = [];
 
-    // placeId가 유효한 숫자로 넘어왔을 때만 필터링
+    // placeId가 정확히 넘어왔을 때는 spots 테이블과 안전하게 매칭합니다.
     if (placeId && placeId !== 'undefined' && !isNaN(placeId)) {
       query = `
-        SELECT id, user_email, nickname, content, photo_path AS image, created_at 
-        FROM posts 
-        WHERE location_name = (SELECT place_name FROM spots WHERE id = ?)
-        ORDER BY id DESC
+        SELECT 
+          p.id, 
+          p.user_email, 
+          p.nickname, 
+          p.content, 
+          p.photo_path AS image, 
+          p.created_at,
+          s.id AS placeId,
+          s.place_name AS placeName
+        FROM posts p
+        JOIN spots s ON p.location_name = s.place_name
+        WHERE s.id = ?
+        ORDER BY p.id DESC
       `;
       params = [Number(placeId)];
     } else {
-      // placeId가 없거나 비정상적이면 전체 목록 반환
+      // 전체 피드 목록을 부를 때도 장소 이름(placeName)과 placeId가 밀리지 않도록 JOIN 결합을 수행합니다.
       query = `
-        SELECT id, user_email, nickname, content, photo_path AS image, created_at 
-        FROM posts 
-        ORDER BY id DESC 
+        SELECT 
+          p.id, 
+          p.user_email, 
+          p.nickname, 
+          p.content, 
+          p.photo_path AS image, 
+          p.created_at,
+          s.id AS placeId,
+          s.place_name AS placeName
+        FROM posts p
+        LEFT JOIN spots s ON p.location_name = s.place_name
+        ORDER BY p.id DESC 
         LIMIT 50
       `;
     }
 
     const [rows] = await pool.query(query, params);
-    console.log(`[조회 완료] 검색된 리뷰 개수: ${rows.length}개`);
-    return res.status(200).json(rows);
+    
+    // 프론트엔드가 다중 필드명(placeName, placeId)에 유연하게 대응하도록 포맷팅하여 반환
+    const formattedRows = rows.map(row => ({
+      id: row.id,
+      user_email: row.user_email,
+      nickname: row.nickname,
+      content: row.content,
+      image: row.image,
+      created_at: row.created_at,
+      placeId: row.placeId || '',
+      place_name: row.placeName || row.location_name || '성지순례 장소',
+      placeName: row.placeName || row.location_name || '성지순례 장소'
+    }));
+
+    console.log(`[조회 완료] 검색된 리뷰 개수: ${formattedRows.length}개`);
+    return res.status(200).json(formattedRows);
 
   } catch (error) {
     console.error("❌ [GET /feeds] DB 에러 발생:", error);
@@ -451,6 +485,10 @@ app.get('/feeds', async (req, res) => {
 // [POST] 리뷰 및 사진 등록 API
 // [POST] 리뷰 및 사진 등록 API (예외 처리 강화 버전)
 // [POST] 리뷰 및 사진 등록 API (예외 처리 강화 버전)
+
+// =================================================================
+// 🌟 [최종 수정] POST /feeds - 리뷰 등록 시 데이터 백업 및 정제 저장
+// =================================================================
 app.post('/feeds', upload.any(), async (req, res) => {
   console.log("[리뷰 등록 요청 진입]");
   
@@ -476,13 +514,13 @@ app.post('/feeds', upload.any(), async (req, res) => {
       imageUrl = image;
     }
 
-    // 2) 장소 이름 우선순위 매칭 (placeName 또는 locationName 둘 다 대응)
-    let finalLocationName = placeName || locationName || '알 수 없는 장소';
+    // 2) 장소 이름 우선순위 매칭 구조 정밀화
+    let finalLocationName = placeName || locationName;
     let finalLatitude = latitude ? Number(latitude) : null;
     let finalLongitude = longitude ? Number(longitude) : null;
 
-    // 만약 placeId가 유효한 숫자로 들어왔고 이름이 없다면 DB에서 백업 조회
-    if (placeId && placeId !== 'undefined' && !isNaN(placeId) && finalLocationName === '알 수 없는 장소') {
+    // 만약 이름이 누락되었고 placeId가 존재한다면 spots 테이블에서 실제 장소명을 스캔해옵니다.
+    if ((!finalLocationName || finalLocationName === '알 수 없는 장소') && placeId && placeId !== 'undefined' && !isNaN(placeId)) {
       const [spotRows] = await pool.query(
         "SELECT place_name, latitude, longitude FROM spots WHERE id = ?", 
         [Number(placeId)]
@@ -494,7 +532,10 @@ app.post('/feeds', upload.any(), async (req, res) => {
       }
     }
 
-    // 3) DB Insert (posts 테이블 구조에 맞게 칼럼 매칭)
+    // 최종 안전장치
+    if (!finalLocationName) finalLocationName = '알 수 없는 장소';
+
+    // 3) DB Insert
     const [result] = await pool.query(
       `INSERT INTO posts 
         (user_email, nickname, content, location_name, latitude, longitude, photo_path) 
@@ -510,14 +551,16 @@ app.post('/feeds', upload.any(), async (req, res) => {
       ]
     );
 
-    console.log(`DB 저장 완료! 게시글 ID: ${result.insertId}`);
+    console.log(`DB 저장 완료! 게시글 ID: ${result.insertId} | 장소명: ${finalLocationName}`);
 
     return res.status(200).json({ 
       success: true, 
       message: "리뷰 등록 성공!", 
       id: result.insertId,
       image: imageUrl,
-      content: content
+      content: content,
+      placeId: placeId,
+      placeName: finalLocationName
     });
 
   } catch (error) {
