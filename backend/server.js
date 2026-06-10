@@ -6,6 +6,7 @@ const axios = require('axios');
 const mysql = require('mysql2/promise');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 
 // 라우터 불러오기
 const userRoute = require('./src/routes/userRoute');
@@ -14,9 +15,11 @@ const app = express();
 
 // 1. 미들웨어 설정
 app.use(cors());
-app.use(express.json());
 
-app.use(express.urlencoded({ extended: true }));
+// ⭐ [수정] JSON 바디 용량 제한을 50MB로 상향 (Base64 이미지 전송 대응)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const pool = mysql.createPool({
@@ -405,4 +408,120 @@ app.listen(PORT, () => {
     console.log(`[로컬 주소] http://localhost:${PORT}`);
     console.log(`[네트워크 주소] http://${myIp}:${PORT}`);
     console.log(`================================================`);
+});
+
+app.get('/feeds', async (req, res) => {
+  // 프론트엔드가 보낸 placeId를 가져옵니다.
+  const { placeId } = req.query;
+  console.log(`[리뷰 조회] 요청된 장소 ID (placeId): ${placeId}`);
+
+  try {
+    let query = '';
+    let params = [];
+
+    // placeId가 유효한 숫자로 넘어왔을 때만 필터링
+    if (placeId && placeId !== 'undefined' && !isNaN(placeId)) {
+      query = `
+        SELECT id, user_email, nickname, content, photo_path AS image, created_at 
+        FROM posts 
+        WHERE location_name = (SELECT place_name FROM spots WHERE id = ?)
+        ORDER BY id DESC
+      `;
+      params = [Number(placeId)];
+    } else {
+      // placeId가 없거나 비정상적이면 전체 목록 반환
+      query = `
+        SELECT id, user_email, nickname, content, photo_path AS image, created_at 
+        FROM posts 
+        ORDER BY id DESC 
+        LIMIT 50
+      `;
+    }
+
+    const [rows] = await pool.query(query, params);
+    console.log(`[조회 완료] 검색된 리뷰 개수: ${rows.length}개`);
+    return res.status(200).json(rows);
+
+  } catch (error) {
+    console.error("❌ [GET /feeds] DB 에러 발생:", error);
+    return res.status(500).json({ success: false, message: "리뷰를 불러오는 중 에러가 발생했습니다." });
+  }
+});
+
+// [POST] 리뷰 및 사진 등록 API
+// [POST] 리뷰 및 사진 등록 API (예외 처리 강화 버전)
+// [POST] 리뷰 및 사진 등록 API (예외 처리 강화 버전)
+app.post('/feeds', upload.any(), async (req, res) => {
+  console.log("[리뷰 등록 요청 진입]");
+  
+  try {
+    const { userEmail, nickname, content, placeId, placeName, locationName, latitude, longitude, image } = req.body;
+    let imageUrl = null;
+
+    // 1) 사진 처리
+    if (image && image.startsWith('data:image')) {
+      const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+      const filename = `photo_${Date.now()}.png`;
+      const uploadPath = path.join(__dirname, 'uploads', filename);
+
+      if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
+        fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+      }
+
+      fs.writeFileSync(uploadPath, base64Data, 'base64');
+      imageUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
+    } else if (req.files && req.files.length > 0) {
+      imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.files[0].filename}`;
+    } else if (image) {
+      imageUrl = image;
+    }
+
+    // 2) 장소 이름 우선순위 매칭 (placeName 또는 locationName 둘 다 대응)
+    let finalLocationName = placeName || locationName || '알 수 없는 장소';
+    let finalLatitude = latitude ? Number(latitude) : null;
+    let finalLongitude = longitude ? Number(longitude) : null;
+
+    // 만약 placeId가 유효한 숫자로 들어왔고 이름이 없다면 DB에서 백업 조회
+    if (placeId && placeId !== 'undefined' && !isNaN(placeId) && finalLocationName === '알 수 없는 장소') {
+      const [spotRows] = await pool.query(
+        "SELECT place_name, latitude, longitude FROM spots WHERE id = ?", 
+        [Number(placeId)]
+      );
+      if (spotRows && spotRows.length > 0) {
+        finalLocationName = spotRows[0].place_name;
+        finalLatitude = spotRows[0].latitude ? Number(spotRows[0].latitude) : finalLatitude;
+        finalLongitude = spotRows[0].longitude ? Number(spotRows[0].longitude) : finalLongitude;
+      }
+    }
+
+    // 3) DB Insert (posts 테이블 구조에 맞게 칼럼 매칭)
+    const [result] = await pool.query(
+      `INSERT INTO posts 
+        (user_email, nickname, content, location_name, latitude, longitude, photo_path) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userEmail || null, 
+        nickname || '익명', 
+        content || '', 
+        finalLocationName, 
+        finalLatitude, 
+        finalLongitude, 
+        imageUrl
+      ]
+    );
+
+    console.log(`DB 저장 완료! 게시글 ID: ${result.insertId}`);
+
+    return res.status(200).json({ 
+      success: true, 
+      message: "리뷰 등록 성공!", 
+      id: result.insertId,
+      image: imageUrl,
+      content: content
+    });
+
+  } catch (error) {
+    console.error("❌ [POST /feeds] 치명적 서버 에러:", error);
+    return res.status(500).json({ success: false, message: "서버 에러가 발생했습니다." });
+  }
 });
