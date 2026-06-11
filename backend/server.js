@@ -173,26 +173,23 @@ app.post('/api/transit/routes', async (req, res) => {
 
 
 // =================================================================
-// [백엔드 server.js 최종수정] idolId 및 카테고리(영어/한글/대소문자 완벽 대응) 통합 API
+// [백엔드 server.js 수정] idolId 파라미터로 장소명까지 검색 가능하게 확장
 // =================================================================
 app.get('/api/places', async (req, res) => {
   try {
-    const { idolId, category } = req.query; // 프론트가 보낸 idolId와 category 추출
+    const { idolId, category } = req.query; 
     
     let query = 'SELECT * FROM spots WHERE 1=1'; 
     let params = [];
 
-    // 1. idolId 필터링 (기존 로직 유지)
+    // 🌟 [수정] idolId 파라미터가 들어왔을 때 그룹, 멤버명뿐만 아니라 장소 이름(place_name)도 검색 범위에 포함합니다.
     if (idolId) {
-      query += ' AND (member_name LIKE ? OR group_name LIKE ?)';
-      params.push(`%${idolId}%`, `%${idolId}%`);
+      query += ' AND (member_name LIKE ? OR group_name LIKE ? OR place_name LIKE ?)';
+      params.push(`%${idolId}%`, `%${idolId}%`, `%${idolId}%`);
     }
 
-    // 2. [★업그레이드★] category 필터링 조건 (한글/영어 대소문자 공백 완전 파괴)
     if (category && category.trim() !== '' && category !== 'all') {
-      // 프론트가 'restaurant', 'cafe', 'playground' 등을 보낼 때 유연하게 매치하기 위해 LIKE 사용
       query += ' AND (category LIKE ? OR category LIKE ?)';
-      
       const cleanCategory = category.trim().toLowerCase();
       params.push(`%${cleanCategory}%`, `%${category}%`);
     }
