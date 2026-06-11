@@ -19,23 +19,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // ==========================================
-// 2. 임시 데이터 (테스트용 장소 데이터)
-// ==========================================
-const mockPlaces = [
-    {
-        id: "1",
-        name: "카리나 추천 맛집 (성지순례)",
-        address: "서울시 관악구 신림동",
-        idolId: "karina", 
-        category: "음식점",
-        lat: 37.476,
-        lng: 126.930,
-        description: "성지순례 필수 코스! 맛있는 곳입니다."
-    }
-];
-
-// ==========================================
-// 3. API 라우터 설정
+// 2. API 라우터 설정
 // ==========================================
 
 // [회원가입 & 로그인]
@@ -77,9 +61,8 @@ router.post('/posts', upload.single('photo'), async (req, res) => {
     }
 });
 
-// [★수정★ 팬 피드 전체 혹은 유저별 격리 조회]
+// [팬 피드 전체 혹은 유저별 격리 조회]
 router.get('/posts', async (req, res) => {
-    // 프론트엔드가 보낸 유저 이메일 수급 (?userEmail=값 또는 ?email=값)
     const userEmail = req.query.userEmail || req.query.email; 
 
     try {
@@ -93,7 +76,6 @@ router.get('/posts', async (req, res) => {
         `;
         const params = [];
 
-        // 🌟 유저 이메일이 파라미터로 명확히 들어왔을 때만 해당 유저 글만 필터링!
         if (userEmail) {
             query += ` WHERE p.user_email = ?`;
             params.push(userEmail);
@@ -109,45 +91,29 @@ router.get('/posts', async (req, res) => {
     }
 });
 
-// [게시글 수정 & 삭제]
+// [게시글 수정 & 삭제 - 컨트롤러와 1:1 단독 연결]
 router.patch('/posts/:id', userController.updatePost);
 router.delete('/posts/:id', userController.deletePost);
 
-// ────────────────────────────────────────────────────────
-// 🌟 [연동 완료] 유저 계정별 즐겨찾기(Favorites) 조회 API 연동
-// ────────────────────────────────────────────────────────
-// [게시글 수정 & 삭제]
-router.patch('/posts/:id', userController.updatePost);
-router.delete('/posts/:id', userController.deletePost);
-
-// ────────────────────────────────────────────────────────
-// 🌟 유저 계정별 즐겨찾기(Favorites) 연동 API 구역
-// ────────────────────────────────────────────────────────
-router.get('/favorites', userController.getUserFavorites);     // 👈 기존에 추가한 조회 API
-
-// 🔴 [이것들을 새로 추가하세요!] 토글(추가/삭제)에 대응하는 라우터 설정
-router.post('/favorites', userController.addUserFavorite);     // ✨ 추가 (POST)
-router.delete('/favorites', userController.deleteUserFavorite);  // ✨ 삭제 (DELETE)
-
-
-// [장소 관련 API]
-router.get('/places', (req, res) => { /* ... */ });
+// [유저 계정별 즐겨찾기(Favorites) 연동 API 구역]
+router.get('/favorites', userController.getUserFavorites); 
+router.post('/favorites', userController.addUserFavorite); 
+router.delete('/favorites', userController.deleteUserFavorite);
 
 // [방문 기록 조회] 특정 유저(이메일)의 성지순례 방문 리스트 가져오기
 router.get('/visit-history/:userEmail', async (req, res) => {
     const { userEmail } = req.params;
-    const query = `
-        SELECT 
-            vh.id,
-            vh.spot_id AS place_id,
-            IFNULL(s.place_name, '확인되지 않은 성지 장소') AS place_name,
-            IFNULL(s.member_name, '') AS member_name,
-            DATE_FORMAT(COALESCE(vh.visit_date, vh.created_at), '%Y-%m-%d %H:%i') AS date
-        FROM visit_history vh
-        LEFT JOIN spots s ON vh.spot_id = s.id
-        WHERE vh.user_email = ?
-        ORDER BY COALESCE(vh.visit_date, vh.created_at) DESC
-    `;
+    // ⭕ userRoute.js 파일 내부에 수정 반영할 올바른 코드 블록
+const query = `
+    SELECT 
+        p.id, p.user_email, p.content, p.photo_path AS photo_url,
+        DATE_FORMAT(p.created_at, '%Y-%m-%d %H:%i') AS date,
+        s.place_name, s.member_name
+    FROM posts p
+    LEFT JOIN spots s ON p.location_name = s.place_name
+    WHERE p.user_email = ? 
+    ORDER BY p.created_at DESC
+`;
     try {
         const [rows] = await db.execute(query, [userEmail]);
         res.status(200).json(rows);

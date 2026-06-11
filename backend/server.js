@@ -46,6 +46,9 @@ const pool = mysql.createPool({
   }
 })();
 
+// 글로벌 pool 바인딩 (외부 라우터인 userRoute 등에서 쓸 수 있도록 최적화)
+app.set('pool', pool);
+
 // ==========================================
 // 3. 파일 업로드 설정 (Multer)
 // ==========================================
@@ -191,49 +194,113 @@ app.delete('/api/favorites/:placeId', async (req, res) => {
 });
 
 // ------------------------------------------
-// 🛣️ 나만의 코스(Courses) API 목록 (철벽 예외 처리 및 외래키 방어 적용)
+// 🛣️ 나만의 코스(Courses) API 목록 (프론트엔드 완벽 호환 UI 복구 버전)
 // ------------------------------------------
 
-// 1. 나만의 코스 목록 전체 조회 API
+// 1. 코스 목록 전체 조회 API (일반 내 코스 및 추천 코스 완벽 분기 처리)
 app.get('/api/courses', async (req, res) => {
+  const idolId = req.query.idolId || 'leeyoungji';
+  const isRecommended = req.query.recommended === 'true'; // 👈 프론트의 recommended 파라미터 감지
+  
+  console.log(`[코스 목록 조회] 요청된 아이돌 ID: ${idolId}, 추천코스여부: ${isRecommended}`);
+
+  // ── 🌟 [추천 코스 분기] 프론트엔드가 기대하는 고정 추천 데이터 반환 ──
+  if (isRecommended) {
+    const RECOMMENDED_COURSES = [
+      {
+        id: 'rec-jk-1',
+        title: '정국 강남 맛집 투어',
+        idolId: 'jungkook',
+        isRecommended: true,
+        description: '정국이 멤버들과 자주 찾던 강남 식당들을 따라가보세요',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        spotsCount: 3,
+        places: [
+          { id: 2, name: '우돈청', address: '서울특별시 강남구 언주로 170길 37', category: '음식점', lat: 37.52661, lng: 127.0367, description: '정국이 구칠즈 멤버들과 함께 식사한 곳' },
+          { id: 3, name: '꽃새우 영번지 역삼점', address: '서울특별시 강남구 언주로 536', category: '음식점', lat: 37.50619, lng: 127.0413, description: '정국이 왔다간 해산물요리 전문점' },
+          { id: 1, name: '개미마을', address: '서울특별시 강남구', category: '음식점', lat: 37.506, lng: 127.042, description: '방문 스팟' }
+        ],
+      },
+      {
+        id: 'rec-jk-2',
+        title: '정국 이태원 코스',
+        idolId: 'jungkook',
+        isRecommended: true,
+        description: '이태원에서 정국의 발자취를 따라가보세요',
+        createdAt: '2026-01-02T00:00:00.000Z',
+        spotsCount: 2,
+        places: [
+          { id: 2, name: '우돈청', address: '서울특별시 강남구 언주로 170길 37', category: '음식점', lat: 37.52661, lng: 127.0367, description: '정국이 구칠즈 멤버들과 함께 식사한 곳' },
+          { id: 3, name: '꽃새우 영번지 역삼점', address: '서울특별시 강남구 언주로 536', category: '음식점', lat: 37.50619, lng: 127.0413, description: '정국이 왔다간 해산물요리 전문점' }
+        ],
+      },
+    ];
+
+    // 현재 선택된 아이돌 ID에 맞게 필터링해서 던져줍니다.
+    const filteredRecommended = idolId && idolId !== 'all'
+      ? RECOMMENDED_COURSES.filter((c) => c.idolId === idolId)
+      : RECOMMENDED_COURSES;
+
+    return res.status(200).json(filteredRecommended);
+  }
+
+  // ── 🏠 [일반 내 코스 분기] DB에서 실시간 저장 데이터 조회 ──
   try {
     const query = `
       SELECT 
         id, 
-        course_name AS title, 
+        title, 
+        idol_id AS idolId,
+        user_email AS userEmail, 
         created_at AS createdAt
       FROM courses
+      WHERE idol_id = ? OR idol_id IS NULL OR ? = 'all'
       ORDER BY created_at DESC
     `;
     
-    const [rows] = await pool.query(query);
-    
-    const formattedCourses = (rows || []).map(course => ({
-      id: course.id,
-      title: course.title || '이름 없는 코스',
-      description: '', 
-      createdAt: course.createdAt,
-      spotsCount: 0 
-    }));
+    const [courses] = await pool.query(query, [idolId, idolId]);
 
-    return res.status(200).json(formattedCourses);
+    for (let course of courses) {
+      const spotQuery = `
+        SELECT 
+          s.id, 
+          s.place_name AS name, 
+          s.address, 
+          s.category, 
+          s.latitude AS lat, 
+          s.longitude AS lng,
+          s.description,
+          s.image_url AS imageUrl
+        FROM course_spots cs
+        JOIN spots s ON cs.spot_id = s.id
+        WHERE cs.course_id = ?
+        ORDER BY cs.sequence_order ASC
+      `;
+      const [spots] = await pool.query(spotQuery, [course.id]);
+      
+      course.places = spots; 
+      course.spotsCount = spots.length; 
+    }
+
+    return res.status(200).json(courses);
+
   } catch (error) {
     console.error('❌ 코스 목록 DB 조회 중 에러 발생:', error);
-    return res.status(500).json([]);
+    return res.status(200).json([]); 
   }
 });
 
-// 2. 코스 등록 API (★ 유연한 필드 매핑 + 유저 강제 자동 생성 안전장치 포함)
+// 2. 코스 등록 API (title 및 idol_id 완벽 연동)
 app.post('/api/courses', async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const { title, course_name, spotIds, places } = req.body; 
+    const { title, course_name, spotIds, places, selectedPlaces, idolId } = req.body; 
     const userEmail = getEmailFromToken(req); 
 
     console.log(`[코스 생성 시도] 유저: ${userEmail}, 전달데이터:`, req.body);
 
-    // 프론트엔드가 title이나 course_name 중 무엇을 보내도 수용함
     const finalTitle = title || course_name;
+    const finalIdolId = idolId || 'leeyoungji'; // 아이돌 유실 방지 방어선
 
     if (!finalTitle) {
       return res.status(400).json({ success: false, message: '코스 제목을 입력해주세요.' });
@@ -241,7 +308,7 @@ app.post('/api/courses', async (req, res) => {
 
     await connection.beginTransaction();
 
-    // 💡 [핵심 방어] users 테이블에 해당 이메일이 없는 경우, 가입 후 진행시켜 에러 차단
+    // 외래키 방어용 유저 체크
     const [userExists] = await connection.query('SELECT id FROM users WHERE email = ?', [userEmail]);
     if (userExists.length === 0) {
       console.log(`💡 [외래키 방어] 코스 등록 중 유저(${userEmail}) 정보가 DB에 없어 임시 계정을 자동 생성합니다.`);
@@ -251,41 +318,38 @@ app.post('/api/courses', async (req, res) => {
       );
     }
 
-    // 실제 DB 컬럼(user_email, course_name)에 맞게 레코드 삽입
-    const insertCourseQuery = 'INSERT INTO courses (user_email, course_name) VALUES (?, ?)';
-    const [courseResult] = await connection.query(insertCourseQuery, [userEmail, finalTitle]);
+    // 💡 변경된 테이블 규격(title, idol_id)에 맞춰 데이터 매핑 및 저장
+    const insertCourseQuery = 'INSERT INTO courses (user_email, title, idol_id, created_at) VALUES (?, ?, ?, NOW())';
+    const [courseResult] = await connection.query(insertCourseQuery, [userEmail, finalTitle, finalIdolId]);
     const newCourseId = courseResult.insertId;
 
-    console.log(`[DB 코스 삽입 성공] ID: ${newCourseId}, 유저: ${userEmail}, 제목: ${finalTitle}`);
+    console.log(`[DB 코스 삽입 성공] ID: ${newCourseId}, 제목: ${finalTitle}, 아이돌: ${finalIdolId}`);
 
-    // ─── [수정 및 강화] 장소 매핑용 ID 배열 추출 안전장치 ───
+    // 장소 ID 유실 없는 통합 파싱 처리
     let finalSpotIds = [];
     if (spotIds && Array.isArray(spotIds)) {
       finalSpotIds = spotIds;
+    } else if (selectedPlaces && Array.isArray(selectedPlaces)) {
+      finalSpotIds = selectedPlaces.map(p => p.id || p.spot_id);
     } else if (places && Array.isArray(places)) {
-      // p.id가 'jk-2' 같은 문자열일 경우, 숫자('2')만 추출하는 방어 코드 추가
       finalSpotIds = places.map(p => {
-        const rawId = typeof p === 'object' ? String(p.id) : String(p);
-        const onlyNumbers = rawId.replace(/[^0-9]/g, ''); // 문자 빼고 숫자만 남기기
+        const rawId = typeof p === 'object' ? String(p.id || p.spot_id) : String(p);
+        const onlyNumbers = rawId.replace(/[^0-9]/g, ''); 
         return onlyNumbers ? Number(onlyNumbers) : null;
       }).filter(id => id !== null);
     }
 
     console.log(`[스팟 ID 파싱 결과]`, finalSpotIds);
 
-    // 연관된 장소 데이터 매핑 테이블(course_spots)에 삽입
     if (finalSpotIds.length > 0) {
-      // ─── [수정] sequence_order 컬럼을 쿼리에 추가 ───
       const insertSpotsQuery = 'INSERT INTO course_spots (course_id, spot_id, sequence_order) VALUES (?, ?, ?)';
       
-      // 반복문에서 index(순서)를 활용할 수 있도록 변경
       for (let i = 0; i < finalSpotIds.length; i++) {
         const spotId = finalSpotIds[i];
-        const sequenceOrder = i + 1; // 1등, 2등, 3등... 순서 부여
+        const sequenceOrder = i + 1; 
 
         if (!isNaN(spotId) && spotId > 0) {
           try {
-            // ─── [수정] sequenceOrder 변수를 바인딩 배열에 추가 ───
             await connection.query(insertSpotsQuery, [newCourseId, spotId, sequenceOrder]);
             console.log(`   └─ [스팟 매핑 성공] 코스 ID: ${newCourseId} -> 장소 ID: ${spotId} (순서: ${sequenceOrder})`);
           } catch (spotErr) {
@@ -293,7 +357,6 @@ app.post('/api/courses', async (req, res) => {
           }
         }
       }
-      console.log(`[DB 연관 스팟 처리 종료] 코스 ID ${newCourseId} 매핑 완료.`);
     }
 
     await connection.commit();
@@ -312,7 +375,7 @@ app.post('/api/courses', async (req, res) => {
   }
 });
 
-// 3. 코스 삭제 API (추가)
+// 3. 코스 삭제 API
 app.delete('/api/courses/:id', async (req, res) => {
   const { id } = req.params;
   console.log(`[코스 삭제 시도] 삭제할 코스 ID: ${id}`);
@@ -325,10 +388,7 @@ app.delete('/api/courses/:id', async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    // 1. 매핑 테이블(course_spots)에서 해당 코스 스팟 관계 먼저 삭제 (외래키 제약 방어)
     await connection.query('DELETE FROM course_spots WHERE course_id = ?', [id]);
-
-    // 2. 메인 코스 테이블(courses)에서 코스 삭제
     const [result] = await connection.query('DELETE FROM courses WHERE id = ?', [id]);
 
     if (result.affectedRows === 0) {
@@ -348,6 +408,8 @@ app.delete('/api/courses/:id', async (req, res) => {
     connection.release();
   }
 });
+
+
 
 // ------------------------------------------
 // 👥 유저 관련 라우터 연결
