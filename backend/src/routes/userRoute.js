@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
+const db = require('../config/db'); // 🌟 MySQL DB 연결 객체 (상위 경로에 맞게 확인하세요)
 const multer = require('multer');
 const path = require('path');
 
@@ -58,15 +59,69 @@ router.patch('/posts/:id', userController.updatePost);
 router.delete('/posts/:id', userController.deletePost);
 
 // [★연동 해결용★ 장소 관련 API]
-// 프론트의 fetchPlacesByIdol 함수가 요청하는 엔드포인트입니다.
 router.get('/places', (req, res) => {
-    // 프론트에서 idolId 혹은 idId 어떤 것으로 보내든 둘 다 안전하게 받을 수 있도록 처리
     const idolId = req.query.idolId || req.query.idId; 
-    
-    // 해당 아이돌에 맞는 장소만 필터링
     const filteredPlaces = mockPlaces.filter(p => p.idolId === idolId);
-    
     res.json(filteredPlaces);
+});
+
+// ==========================================
+// 🎒 [추가] 방문 기록 (visit_history) 연동 API
+// ==========================================
+
+/**
+ * [방문 기록 조회] 특정 유저(이메일)의 성지순례 방문 리스트 가져오기
+ * GET /api/users/visit-history/:userEmail
+ * (※ 프론트엔드 주소 구조에 맞춰 명시했습니다.)
+ */
+router.get('/visit-history/:userEmail', async (req, res) => {
+    const { userEmail } = req.params;
+
+    // visit_history와 spots 테이블을 JOIN하여 진짜 장소 이름(name)을 동적으로 긁어옵니다.
+    const query = `
+        SELECT 
+            vh.id,
+            vh.spot_id AS place_id,
+            s.name AS place_name,
+            DATE_FORMAT(COALESCE(vh.visit_date, vh.created_at), '%Y-%m-%d %H:%i') AS date
+        FROM visit_history vh
+        JOIN spots s ON vh.spot_id = s.id
+        WHERE vh.user_email = ?
+        ORDER BY COALESCE(vh.visit_date, vh.created_at) DESC
+    `;
+
+    try {
+        const [rows] = await db.execute(query, [userEmail]);
+        res.status(200).json(rows);
+    } catch (err) {
+        console.error('방문 기록 조회 중 DB 에러 발생:', err);
+        res.status(500).json({ message: '방문 기록을 불러오는 중 서버 내부 에러가 발생했습니다.' });
+    }
+});
+
+/**
+ * [방문 인증 등록] 새로운 성지 발자국 남기기 (지도나 상세페이지에서 추후 사용)
+ * POST /api/users/visit-history
+ */
+router.post('/visit-history', async (req, res) => {
+    const { userEmail, spotId, visitDate } = req.body;
+
+    if (!userEmail || !spotId) {
+        return res.status(400).json({ message: '이메일과 장소 ID(spotId)는 필수 항목입니다.' });
+    }
+
+    const query = `
+        INSERT INTO visit_history (user_email, spot_id, visit_date, created_at) 
+        VALUES (?, ?, COALESCE(?, NOW()), NOW())
+    `;
+
+    try {
+        await db.execute(query, [userEmail, spotId, visitDate || null]);
+        res.status(201).json({ message: '성지순례 방문 인증 성공! 🎒' });
+    } catch (err) {
+        console.error('방문 기록 등록 중 DB 에러 발생:', err);
+        res.status(500).json({ message: '방문 인증을 처리하는 중 오류가 발생했습니다.' });
+    }
 });
 
 // ==========================================
