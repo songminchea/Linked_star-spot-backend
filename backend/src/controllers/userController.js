@@ -258,20 +258,20 @@ exports.getVisitHistory = async (req, res) => {
     const { email } = req.params;
 
     try {
-        // 💡 spot_id가 VARCHAR(50) 문자열이므로, spots.id 문자열과 일대일로 정확하게 JOIN 결합합니다.
+        // 💡 v(visit_history)를 기준으로 조회하고, s(spots)에서 추가 정보를 가져옵니다.
         const sql = `
-            SELECT 
-                v.id,
-                v.user_email,
-                v.spot_id,
-                DATE_FORMAT(v.visit_date, '%Y-%m-%d %H:%i:%s') AS date,
-                v.place_name,
-                s.member_name
-            FROM visit_history v
-            LEFT JOIN spots s ON v.spot_id = s.id
-            WHERE v.user_email = ?
-            ORDER BY v.visit_date DESC
-        `;
+    SELECT 
+        v.id,
+        v.user_email,
+        v.spot_id,
+        DATE_FORMAT(v.visit_date, '%Y-%m-%d %H:%i:%s') AS date,
+        s.place_name, -- 💡 v.place_name 에서 s.place_name 으로 변경!
+        s.member_name
+    FROM visit_history v
+    LEFT JOIN spots s ON v.spot_id = s.id
+    WHERE v.user_email = ?
+    ORDER BY v.visit_date DESC
+`;
         const [rows] = await db.execute(sql, [email]);
         res.status(200).json(Array.isArray(rows) ? rows : []);
     } catch (err) {
